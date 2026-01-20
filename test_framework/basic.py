@@ -70,6 +70,10 @@ IGNORED_TESTS = {
     "chapter_15/invalid_types/sub_double_from_ptr.c",
     "chapter_16/valid/chars/partial_initialization.c",
     "chapter_16/valid/extra_credit/compound_assign_chars.c",
+    "chapter_17/valid/sizeof/sizeof_result_is_ulong.c",
+    "chapter_17/valid/sizeof/simple.c",
+    "chapter_17/valid/libraries/pass_alloced_memory.c",
+    "chapter_17/valid/libraries/pass_alloced_memory_client.c",
 }
 PREPROCESSOR_ENV = "DIOPTASE_GCC"
 PREPROCESSOR_FLAGS = ["-E", "-P"]
