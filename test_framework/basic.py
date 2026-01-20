@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
 import platform
+import re
 import subprocess
 import sys
 import unittest
 from enum import Flag, auto, unique
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Type
+from typing import Any, Callable, Dict, List, Optional, Pattern, Sequence, Type
 
 # Constants + per-test info from configuration files
 # TODO should this be in a separate module maybe?
@@ -46,6 +48,61 @@ ASSEMBLY_LIBS = set(
     for platform_specific_lib in [lib + MAC_SUFFIX, lib + LINUX_SUFFIX]
 )
 
+# Emulator runner configuration for Dioptase backend tests.
+EMU_RUN_ENV = "DIOPTASE_WACC_EMULATOR"
+EMU_ASSEMBLER_ENV = "DIOPTASE_ASSEMBLER"
+EMU_EMULATOR_ENV = "DIOPTASE_EMULATOR_SIMPLE"
+EMU_MAX_CYCLES_ENV = "TAC_EMU_MAX_CYCLES"
+EMU_MAX_CYCLES_DEFAULT = 100000
+EMU_RUN_SLOW_TESTS_ENV = "EMU_RUN_SLOW_TESTS"
+EMU_SLOW_TESTS = {
+    "empty_loop_body.c",
+    "test_for_memory_leaks.c",
+}
+
+# these tests use features we don't support yet; skip them
+# (mainly decimal/floating point constants)
+IGNORED_TESTS = {
+    "chapter_14/invalid_types/bad_null_pointer_constant.c",
+    "chapter_15/invalid_parse/double_declarator.c",
+    "chapter_15/invalid_types/double_subscript.c",
+    "chapter_15/invalid_types/extra_credit/compound_add_double_to_pointer.c",
+    "chapter_15/invalid_types/sub_double_from_ptr.c",
+    "chapter_16/valid/chars/partial_initialization.c",
+    "chapter_16/valid/extra_credit/compound_assign_chars.c",
+}
+PREPROCESSOR_ENV = "DIOPTASE_GCC"
+PREPROCESSOR_FLAGS = ["-E", "-P"]
+PREPROCESSOR_ARG_TAKES_VALUE = {
+    "-D",
+    "-I",
+    "-U",
+    "-include",
+    "-imacros",
+    "-isystem",
+    "-iquote",
+    "-idirafter",
+}
+
+REPO_ROOT = ROOT_DIR.parents[4] if len(ROOT_DIR.parents) > 4 else ROOT_DIR
+EMU_DEFAULT_ASSEMBLER_PATHS = [
+    REPO_ROOT / "Dioptase-Assembler" / "build" / "debug" / "basm",
+    REPO_ROOT / "Dioptase-Assembler" / "build" / "release" / "basm",
+]
+EMU_DEFAULT_EMULATOR_PATHS = [
+    REPO_ROOT
+    / "Dioptase-Emulators"
+    / "Dioptase-Emulator-Simple"
+    / "target"
+    / "debug"
+    / "Dioptase-Emulator-Simple",
+    REPO_ROOT
+    / "Dioptase-Emulators"
+    / "Dioptase-Emulator-Simple"
+    / "target"
+    / "release"
+    / "Dioptase-Emulator-Simple",
+]
 # main TestChapter class + related utilities
 
 
@@ -86,6 +143,204 @@ def get_libs(prog: Path) -> List[Path]:
             lib_path = TEST_DIR / l
             libs.append(lib_path)
     return libs
+
+
+# Regex to strip comments and string/char literals for type-skip detection.
+COMMENT_AND_STRING_RE = re.compile(
+    r'//.*?$|/\*.*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
+    re.DOTALL | re.MULTILINE,
+)
+
+
+def strip_comments_and_strings(source: str) -> str:
+    """Remove comments and string/char literals so skip checks don't match noise."""
+    return COMMENT_AND_STRING_RE.sub(" ", source)
+
+
+def build_type_skip_pattern(type_tokens: Sequence[str]) -> Optional[Pattern[str]]:
+    """Build a keyword regex for types we want to exclude from the test set."""
+    tokens = [token for token in type_tokens if token]
+    if not tokens:
+        return None
+    patterns = [r"\b" + re.escape(token) + r"\b" for token in tokens]
+    if "long" in tokens:
+        # Treat long-suffixed integer literals as long usage (e.g., 2l, 3ul, 4LL).
+        patterns.append(r"\b(?:0[xX][0-9a-fA-F]+|[0-9]+)[uU]?[lL]{1,2}\b")
+    return re.compile("|".join(patterns))
+
+
+def contains_type_tokens(program: Path, type_pattern: Pattern[str]) -> bool:
+    """Check for excluded type keywords in source, ignoring comments/strings."""
+    text = program.read_text(encoding="utf-8")
+    scrubbed = strip_comments_and_strings(text)
+    return type_pattern.search(scrubbed) is not None
+
+
+def is_library_test(program: Path) -> bool:
+    """Identify library-dependent tests so they can be skipped when requested."""
+    if "libraries" in program.parts:
+        return True
+    if needs_mathlib(program):
+        return True
+    return bool(get_libs(program))
+
+
+def has_asm_libs(program: Path) -> bool:
+    """Return true when a test depends on assembly helper libraries."""
+    return any(lib.suffix == ".s" for lib in get_libs(program))
+
+
+def uses_emulator() -> bool:
+    """Return true when the Dioptase emulator backend is enabled for test runs."""
+    return bool(os.environ.get(EMU_RUN_ENV))
+
+
+def run_slow_emulator_tests() -> bool:
+    """Return true when slow emulator tests are explicitly enabled."""
+    raw = os.environ.get(EMU_RUN_SLOW_TESTS_ENV)
+    if raw is None:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def is_slow_emulator_test(program: Path) -> bool:
+    """Return true when a test is known to be too slow for the emulator."""
+    return program.name in EMU_SLOW_TESTS
+
+
+def is_ignored_test(program: Path) -> bool:
+    """Return true when a test is listed in IGNORED_TESTS."""
+    try:
+        key = program.relative_to(TEST_DIR).as_posix()
+    except ValueError:
+        return False
+    return key in IGNORED_TESTS
+
+
+def has_expected_stdout(program: Path) -> bool:
+    """Return true when the test expects stdout output."""
+    props_key = get_props_key(program)
+    expected = EXPECTED_RESULTS.get(props_key)
+    if expected is None:
+        return False
+    return bool(expected.get("stdout"))
+
+
+def select_tool(env_name: str, defaults: Sequence[Path]) -> Optional[Path]:
+    """Return an executable path from an environment override or defaults."""
+    raw = os.environ.get(env_name)
+    if raw is not None and raw.strip() != "":
+        candidate = Path(raw).expanduser().resolve()
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return candidate
+        return None
+    for candidate in defaults:
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def get_preprocessor_command() -> str:
+    """Return the gcc-compatible preprocessor command for test runs."""
+    raw = os.environ.get(PREPROCESSOR_ENV)
+    if raw is None or raw.strip() == "":
+        return "gcc"
+    return raw.strip()
+
+
+def collect_preprocessor_args(options: Sequence[str]) -> List[str]:
+    """Extract gcc preprocessor options from compiler arguments."""
+    args: List[str] = []
+    i = 0
+    while i < len(options):
+        opt = options[i]
+        if opt in PREPROCESSOR_ARG_TAKES_VALUE:
+            if i + 1 >= len(options):
+                raise ValueError(f"missing argument after {opt}")
+            args.extend([opt, options[i + 1]])
+            i += 2
+            continue
+        if opt.startswith(("-D", "-I", "-U", "-include", "-imacros")):
+            args.append(opt)
+            i += 1
+            continue
+        if opt.startswith(("-isystem", "-iquote", "-idirafter")):
+            args.append(opt)
+            i += 1
+            continue
+        i += 1
+    return args
+
+
+def preprocess_source(
+    preprocessor: str,
+    source: Path,
+    output: Path,
+    options: Sequence[str],
+) -> subprocess.CompletedProcess[str]:
+    """Run the host preprocessor to expand includes and macros."""
+    pre_args = collect_preprocessor_args(options)
+    args = [
+        preprocessor,
+        *PREPROCESSOR_FLAGS,
+        *pre_args,
+        str(source),
+        "-o",
+        str(output),
+    ]
+    return subprocess.run(args, check=False, capture_output=True, text=True)
+
+
+def parse_u32_nonzero(text: str) -> Optional[int]:
+    """Parse a non-zero unsigned integer from text; return None on failure."""
+    stripped = text.strip()
+    if not stripped:
+        return None
+    try:
+        value = int(stripped, 10)
+    except ValueError:
+        return None
+    if value <= 0 or value > 0xFFFFFFFF:
+        return None
+    return value
+
+
+def parse_emulator_hex(text: str) -> Optional[int]:
+    """Parse a hex value from emulator output into a signed 32-bit integer."""
+    stripped = text.strip()
+    if not stripped:
+        return None
+    try:
+        value = int(stripped, 16)
+    except ValueError:
+        return None
+    value &= 0xFFFFFFFF
+    if value & 0x80000000:
+        value -= 0x100000000
+    return value
+
+
+def should_skip_program(
+    program: Path,
+    *,
+    skip_libraries: bool,
+    skip_stdout: bool,
+    skip_type_pattern: Optional[Pattern[str]],
+) -> bool:
+    """Skip tests that exercise features outside the configured subset."""
+    if is_ignored_test(program):
+        return True
+    if uses_emulator() and has_asm_libs(program):
+        return True
+    if uses_emulator() and not run_slow_emulator_tests() and is_slow_emulator_test(program):
+        return True
+    if skip_libraries and is_library_test(program):
+        return True
+    if skip_stdout and has_expected_stdout(program):
+        return True
+    if skip_type_pattern is not None and contains_type_tokens(program, skip_type_pattern):
+        return True
+    return False
 
 
 def print_stderr(proc: subprocess.CompletedProcess[str]) -> None:
@@ -177,8 +432,8 @@ def build_error_message(
 
     # report on incorrect stderr (note: we always expect stderr to be empty)
     if actual.stderr:
-        msg_lines.append("* Expected no output to stderr, but found:\n")
-        msg_lines.extend(actual.stderr)
+        msg_lines.append("* Expected no output to stderr, but found:")
+        msg_lines.extend(actual.stderr.splitlines())
 
     return "\n".join(msg_lines)
 
@@ -368,8 +623,12 @@ class TestChapter(unittest.TestCase):
     def compile_and_run(self, source_file: Path) -> None:
         """Compile a valid test program, run it, and validate the results"""
 
-        # if this depends on extra libraries, call library_test_helper instead
         extra_libs = get_libs(source_file)
+        if uses_emulator():
+            self.emulator_compile_and_run(source_file, extra_libs)
+            return
+
+        # if this depends on extra libraries, call library_test_helper instead
         if extra_libs:
             self.library_test_helper(source_file, extra_libs)
             return
@@ -401,6 +660,107 @@ class TestChapter(unittest.TestCase):
 
         self.validate_runs(source_file, result)
 
+    def emulator_compile_and_run(
+        self, source_file: Path, other_files: List[Path]
+    ) -> None:
+        """Compile all sources to assembly, assemble with basm, and run the emulator."""
+        assembler = select_tool(EMU_ASSEMBLER_ENV, EMU_DEFAULT_ASSEMBLER_PATHS)
+        if assembler is None:
+            self.fail(
+                f"Emulator run requires basm; set {EMU_ASSEMBLER_ENV} or build Dioptase-Assembler"
+            )
+        emulator = select_tool(EMU_EMULATOR_ENV, EMU_DEFAULT_EMULATOR_PATHS)
+        if emulator is None:
+            self.fail(
+                f"Emulator run requires the simple emulator; set {EMU_EMULATOR_ENV} or build it"
+            )
+
+        preprocessor = get_preprocessor_command()
+        sources = [source_file] + other_files
+        asm_files: list[Path] = []
+        for src in sources:
+            if src.suffix == ".c":
+                preprocessed = src.with_suffix(".emu.i")
+                try:
+                    preprocess_result = preprocess_source(
+                        preprocessor, src, preprocessed, self.options
+                    )
+                except FileNotFoundError:
+                    self.fail(
+                        f"emulator preprocessor '{preprocessor}' was not found in PATH"
+                    )
+                except ValueError as exc:
+                    self.fail(f"invalid preprocessor options: {exc}")
+                if preprocess_result.returncode != 0:
+                    details = preprocess_result.stderr
+                    if preprocess_result.stdout:
+                        details = f"{details}\n{preprocess_result.stdout}"
+                    self.fail(
+                        f"emulator preprocessing failed for {src}:\n"
+                        f"{details}"
+                    )
+                asm_path = src.with_suffix(".emu.s")
+                args = [
+                    str(self.cc),
+                    *self.options,
+                    "-s",
+                    "-o",
+                    str(asm_path),
+                    str(preprocessed),
+                ]
+                compile_result = subprocess.run(
+                    args, check=False, capture_output=True, text=True
+                )
+                if compile_result.returncode != 0:
+                    self.fail(
+                        f"emulator compile failed for {src}:\n{compile_result.stderr}"
+                    )
+                asm_files.append(asm_path)
+            elif src.suffix == ".s":
+                asm_files.append(src)
+            else:
+                self.fail(f"unsupported dependency for emulator run: {src}")
+
+        hex_path = source_file.with_suffix(".emu.hex")
+        asm_args = [str(assembler), "-crt", "-o", str(hex_path)]
+        asm_args.extend(str(path) for path in asm_files)
+        asm_result = subprocess.run(asm_args, check=False, capture_output=True, text=True)
+        if asm_result.returncode != 0:
+            self.fail(f"assembler failed for {source_file}:\n{asm_result.stderr}")
+
+        max_cycles = EMU_MAX_CYCLES_DEFAULT
+        max_env = os.environ.get(EMU_MAX_CYCLES_ENV)
+        if max_env is not None and max_env.strip() != "":
+            parsed = parse_u32_nonzero(max_env)
+            if parsed is None:
+                self.fail(
+                    f"invalid {EMU_MAX_CYCLES_ENV}={max_env} (expected non-zero u32)"
+                )
+            max_cycles = parsed
+
+        emu_args = [
+            str(emulator),
+            "--max-cycles",
+            str(max_cycles),
+            str(hex_path),
+        ]
+        emu_result = subprocess.run(emu_args, check=False, capture_output=True, text=True)
+        if emu_result.returncode != 0:
+            self.fail(
+                f"emulator failed for {source_file} (status {emu_result.returncode}):\n"
+                f"{emu_result.stderr}"
+            )
+
+        emu_value = parse_emulator_hex(emu_result.stdout)
+        if emu_value is None:
+            self.fail(f"unable to parse emulator output: {emu_result.stdout!r}")
+
+        exit_code = emu_value & 0xFF
+        actual = subprocess.CompletedProcess(
+            [str(source_file.with_suffix(""))], exit_code, "", ""
+        )
+        self.validate_runs(source_file, actual)
+
     def library_test_helper(
         self, file_under_test: Path, other_files: List[Path]
     ) -> None:
@@ -416,6 +776,9 @@ class TestChapter(unittest.TestCase):
                 compiled with self.cc and inspected
             other_files: Absolute paths to other files in the multi-file program
         """
+        if uses_emulator():
+            self.emulator_compile_and_run(file_under_test, other_files)
+            return
 
         # If file_under_test is a C program, compile it with self.cc;
         # otherwise assume it's already been compiled with self.cc
@@ -624,7 +987,12 @@ def make_test_lib(program: Path) -> Callable[[TestChapter], None]:
 
 
 def make_invalid_tests(
-    test_dir: Path, stage: str, extra_credit_flags: ExtraCredit
+    test_dir: Path,
+    stage: str,
+    extra_credit_flags: ExtraCredit,
+    skip_libraries: bool,
+    skip_stdout: bool,
+    skip_type_pattern: Optional[Pattern[str]],
 ) -> list[tuple[str, Callable[[TestChapter], None]]]:
     """Generate one test method for each invalid test program in test_dir.
 
@@ -637,6 +1005,9 @@ def make_invalid_tests(
                are considered invalid (e.g. if stage is "parse" programs with type errors
                are valid, because we stop before typechecking)
         extra_credit_flags: extra credit features to test (specified on the command line)
+        skip_libraries: skip tests that depend on helper libs or library directories
+        skip_stdout: skip tests that expect stdout output
+        skip_type_pattern: regex to skip tests mentioning unsupported type keywords
 
     Returns:
         A list of (name, test method) tuples, intended to be included on a dynamically generated
@@ -646,6 +1017,13 @@ def make_invalid_tests(
     for invalid_subdir in DIRECTORIES_BY_STAGE[stage]["invalid"]:
         invalid_test_dir = test_dir / invalid_subdir
         for program in invalid_test_dir.rglob("*.c"):
+            if should_skip_program(
+                program,
+                skip_libraries=skip_libraries,
+                skip_stdout=skip_stdout,
+                skip_type_pattern=skip_type_pattern,
+            ):
+                continue
             if excluded_extra_credit(program, extra_credit_flags):
                 continue
 
@@ -662,7 +1040,12 @@ def make_invalid_tests(
 
 
 def make_valid_tests(
-    test_dir: Path, stage: str, extra_credit_flags: ExtraCredit
+    test_dir: Path,
+    stage: str,
+    extra_credit_flags: ExtraCredit,
+    skip_libraries: bool,
+    skip_stdout: bool,
+    skip_type_pattern: Optional[Pattern[str]],
 ) -> list[tuple[str, Callable[[TestChapter], None]]]:
     """Generate one test method for each valid test program in test_dir.
 
@@ -677,6 +1060,9 @@ def make_valid_tests(
                are considered valid (e.g. if stage is "parse" programs with type errors
                are valid, because we stop before typechecking)
         extra_credit_flags: extra credit features to test (specified on the command line)
+        skip_libraries: skip tests that depend on helper libs or library directories
+        skip_stdout: skip tests that expect stdout output
+        skip_type_pattern: regex to skip tests mentioning unsupported type keywords
 
     Returns:
         A list of (name, test method) tuples, intended to be included on a dynamically generated
@@ -686,6 +1072,13 @@ def make_valid_tests(
     for valid_subdir in DIRECTORIES_BY_STAGE[stage]["valid"]:
         valid_testdir = test_dir / valid_subdir
         for program in valid_testdir.rglob("*.c"):
+            if should_skip_program(
+                program,
+                skip_libraries=skip_libraries,
+                skip_stdout=skip_stdout,
+                skip_type_pattern=skip_type_pattern,
+            ):
+                continue
             if excluded_extra_credit(program, extra_credit_flags):
                 # this requires extra credit features that aren't enabled
                 continue
@@ -721,6 +1114,9 @@ def build_test_class(
     extra_credit_flags: ExtraCredit,
     skip_invalid: bool,
     error_codes: list[int],
+    skip_libraries: bool = False,
+    skip_stdout: bool = False,
+    skip_type_tokens: Optional[Sequence[str]] = None,
 ) -> Type[unittest.TestCase]:
     """Construct the test class for a normal (non-optimization) chapter.
 
@@ -736,6 +1132,9 @@ def build_test_class(
         extra_credit_flags: extra credit features to test, represented as a bit vector
         skip_invalid: true if we should skip invalid test programs
         error_codes: expected compiler exit codes when rejecting invalid programs
+        skip_libraries: skip tests that depend on helper libs or library directories
+        skip_stdout: skip tests that expect stdout output
+        skip_type_tokens: type keywords used to skip unsupported test programs
     """
 
     # base directory with all of this chapter's test programs
@@ -752,15 +1151,32 @@ def build_test_class(
         "error_codes": error_codes,
     }
 
+    # Compile skip predicate once per chapter to avoid repeated regex construction.
+    skip_type_pattern = build_type_skip_pattern(skip_type_tokens or [])
+
     # generate tests for invalid test programs and add them to testclass_attrs
     if not skip_invalid:
-        invalid_tests = make_invalid_tests(test_dir, stage, extra_credit_flags)
+        invalid_tests = make_invalid_tests(
+            test_dir,
+            stage,
+            extra_credit_flags,
+            skip_libraries,
+            skip_stdout,
+            skip_type_pattern,
+        )
         # test_name is the method name
         for test_name, test_cls in invalid_tests:
             testclass_attrs[test_name] = test_cls
 
     # generate tests for valid test programs
-    valid_tests = make_valid_tests(test_dir, stage, extra_credit_flags)
+        valid_tests = make_valid_tests(
+            test_dir,
+            stage,
+            extra_credit_flags,
+            skip_libraries,
+            skip_stdout,
+            skip_type_pattern,
+        )
     for test_name, test_cls in valid_tests:
         # test_name is the method name
         testclass_attrs[test_name] = test_cls

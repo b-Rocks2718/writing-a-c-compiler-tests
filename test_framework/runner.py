@@ -108,6 +108,22 @@ def parse_arguments() -> argparse.Namespace:
         help="Only run valid test programs (useful when testing backend changes)",
     )
     parser.add_argument(
+        "--skip-libraries",
+        action="store_true",
+        help="Skip tests that depend on helper libraries or libraries directories",
+    )
+    parser.add_argument(
+        "--skip-stdout",
+        action="store_true",
+        help="Skip tests that expect stdout output",
+    )
+    parser.add_argument(
+        "--skip-types",
+        nargs="+",
+        metavar="type",
+        help="Skip tests that mention the given type keywords (e.g. long double float)",
+    )
+    parser.add_argument(
         "--failfast", "-f", action="store_true", help="Stop on first test failure"
     )
     parser.add_argument("--verbose", "-v", action="count", default=0)
@@ -487,6 +503,9 @@ def main() -> int:
                 extra_credit_flags=extra_credit,
                 skip_invalid=args.skip_invalid,
                 error_codes=args.expected_error_codes,
+                skip_libraries=args.skip_libraries,
+                skip_stdout=args.skip_stdout,
+                skip_type_tokens=args.skip_types,
             )
             test_instance = unittest.defaultTestLoader.loadTestsFromTestCase(test_class)
             test_suite.addTest(test_instance)
