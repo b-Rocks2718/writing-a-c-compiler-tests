@@ -52,6 +52,10 @@ ASSEMBLY_LIBS = set(
 EMU_RUN_ENV = "DIOPTASE_WACC_EMULATOR"
 EMU_ASSEMBLER_ENV = "DIOPTASE_ASSEMBLER"
 EMU_EMULATOR_ENV = "DIOPTASE_EMULATOR_SIMPLE"
+EMU_EMULATOR_FULL_ENV = "DIOPTASE_EMULATOR_FULL"
+EMU_KERNEL_ENV = "DIOPTASE_WACC_KERNEL"
+EMU_KERNEL_INIT_ENV = "DIOPTASE_WACC_KERNEL_INIT"
+EMU_KERNEL_ARITH_ENV = "DIOPTASE_WACC_KERNEL_ARITH"
 EMU_MAX_CYCLES_ENV = "TAC_EMU_MAX_CYCLES"
 EMU_MAX_CYCLES_DEFAULT = 100000
 EMU_RUN_SLOW_TESTS_ENV = "EMU_RUN_SLOW_TESTS"
@@ -89,6 +93,7 @@ PREPROCESSOR_ARG_TAKES_VALUE = {
 }
 
 REPO_ROOT = ROOT_DIR.parents[4] if len(ROOT_DIR.parents) > 4 else ROOT_DIR
+COMPILER_ROOT = ROOT_DIR.parents[1] if len(ROOT_DIR.parents) > 1 else ROOT_DIR
 EMU_DEFAULT_ASSEMBLER_PATHS = [
     REPO_ROOT / "Dioptase-Assembler" / "build" / "debug" / "basm",
     REPO_ROOT / "Dioptase-Assembler" / "build" / "release" / "basm",
@@ -107,6 +112,22 @@ EMU_DEFAULT_EMULATOR_PATHS = [
     / "release"
     / "Dioptase-Emulator-Simple",
 ]
+EMU_DEFAULT_FULL_EMULATOR_PATHS = [
+    REPO_ROOT
+    / "Dioptase-Emulators"
+    / "Dioptase-Emulator-Full"
+    / "target"
+    / "debug"
+    / "Dioptase-Emulator-Full",
+    REPO_ROOT
+    / "Dioptase-Emulators"
+    / "Dioptase-Emulator-Full"
+    / "target"
+    / "release"
+    / "Dioptase-Emulator-Full",
+]
+EMU_DEFAULT_KERNEL_INIT = COMPILER_ROOT / "tests" / "kernel" / "init.s"
+EMU_DEFAULT_KERNEL_ARITH = COMPILER_ROOT / "tests" / "kernel" / "arithmetic.s"
 # main TestChapter class + related utilities
 
 
@@ -199,6 +220,11 @@ def uses_emulator() -> bool:
     return bool(os.environ.get(EMU_RUN_ENV))
 
 
+def uses_kernel_emulator() -> bool:
+    """Return true when emulator tests should run in kernel mode."""
+    return uses_emulator() and bool(os.environ.get(EMU_KERNEL_ENV))
+
+
 def run_slow_emulator_tests() -> bool:
     """Return true when slow emulator tests are explicitly enabled."""
     raw = os.environ.get(EMU_RUN_SLOW_TESTS_ENV)
@@ -241,6 +267,18 @@ def select_tool(env_name: str, defaults: Sequence[Path]) -> Optional[Path]:
     for candidate in defaults:
         if candidate.exists() and os.access(candidate, os.X_OK):
             return candidate
+    return None
+
+
+def select_data_path(env_name: str, default: Path) -> Optional[Path]:
+    """Return a data file path from an environment override or default."""
+    raw = os.environ.get(env_name)
+    if raw is not None and raw.strip() != "":
+        candidate = Path(raw).expanduser().resolve()
+    else:
+        candidate = default
+    if candidate.exists():
+        return candidate
     return None
 
 
@@ -668,23 +706,45 @@ class TestChapter(unittest.TestCase):
         self, source_file: Path, other_files: List[Path]
     ) -> None:
         """Compile all sources to assembly, assemble with basm, and run the emulator."""
+        kernel_mode = uses_kernel_emulator()
         assembler = select_tool(EMU_ASSEMBLER_ENV, EMU_DEFAULT_ASSEMBLER_PATHS)
         if assembler is None:
             self.fail(
                 f"Emulator run requires basm; set {EMU_ASSEMBLER_ENV} or build Dioptase-Assembler"
             )
-        emulator = select_tool(EMU_EMULATOR_ENV, EMU_DEFAULT_EMULATOR_PATHS)
-        if emulator is None:
-            self.fail(
-                f"Emulator run requires the simple emulator; set {EMU_EMULATOR_ENV} or build it"
-            )
+        if kernel_mode:
+            emulator = select_tool(EMU_EMULATOR_FULL_ENV, EMU_DEFAULT_FULL_EMULATOR_PATHS)
+            if emulator is None:
+                self.fail(
+                    "Kernel emulator run requires the full emulator; set "
+                    f"{EMU_EMULATOR_FULL_ENV} or build it"
+                )
+            kernel_init = select_data_path(EMU_KERNEL_INIT_ENV, EMU_DEFAULT_KERNEL_INIT)
+            if kernel_init is None:
+                self.fail(
+                    "Kernel emulator run requires init.s; set "
+                    f"{EMU_KERNEL_INIT_ENV} or ensure {EMU_DEFAULT_KERNEL_INIT} exists"
+                )
+            kernel_arith = select_data_path(EMU_KERNEL_ARITH_ENV, EMU_DEFAULT_KERNEL_ARITH)
+            if kernel_arith is None:
+                self.fail(
+                    "Kernel emulator run requires arithmetic.s; set "
+                    f"{EMU_KERNEL_ARITH_ENV} or ensure {EMU_DEFAULT_KERNEL_ARITH} exists"
+                )
+        else:
+            emulator = select_tool(EMU_EMULATOR_ENV, EMU_DEFAULT_EMULATOR_PATHS)
+            if emulator is None:
+                self.fail(
+                    f"Emulator run requires the simple emulator; set {EMU_EMULATOR_ENV} or build it"
+                )
 
         preprocessor = get_preprocessor_command()
         sources = [source_file] + other_files
         asm_files: list[Path] = []
+        suffix_tag = "kemu" if kernel_mode else "emu"
         for src in sources:
             if src.suffix == ".c":
-                preprocessed = src.with_suffix(".emu.i")
+                preprocessed = src.with_suffix(f".{suffix_tag}.i")
                 try:
                     preprocess_result = preprocess_source(
                         preprocessor, src, preprocessed, self.options
@@ -703,10 +763,12 @@ class TestChapter(unittest.TestCase):
                         f"emulator preprocessing failed for {src}:\n"
                         f"{details}"
                     )
-                asm_path = src.with_suffix(".emu.s")
+                asm_path = src.with_suffix(f".{suffix_tag}.s")
+                kernel_args = ["-kernel"] if kernel_mode else []
                 args = [
                     str(self.cc),
                     *self.options,
+                    *kernel_args,
                     "-s",
                     "-o",
                     str(asm_path),
@@ -725,9 +787,14 @@ class TestChapter(unittest.TestCase):
             else:
                 self.fail(f"unsupported dependency for emulator run: {src}")
 
-        hex_path = source_file.with_suffix(".emu.hex")
-        asm_args = [str(assembler), "-crt", "-o", str(hex_path)]
-        asm_args.extend(str(path) for path in asm_files)
+        hex_path = source_file.with_suffix(f".{suffix_tag}.hex")
+        if kernel_mode:
+            asm_args = [str(assembler), "-kernel", "-o", str(hex_path)]
+            asm_args.extend(str(path) for path in asm_files)
+            asm_args.extend([str(kernel_arith), str(kernel_init)])
+        else:
+            asm_args = [str(assembler), "-crt", "-o", str(hex_path)]
+            asm_args.extend(str(path) for path in asm_files)
         asm_result = subprocess.run(asm_args, check=False, capture_output=True, text=True)
         if asm_result.returncode != 0:
             self.fail(f"assembler failed for {source_file}:\n{asm_result.stderr}")
