@@ -12,7 +12,7 @@ import sys
 import unittest
 from enum import Flag, auto, unique
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Pattern, Sequence, Type
+from typing import Any, Callable, Dict, List, Optional, Pattern, Sequence, Set, Type
 
 # Constants + per-test info from configuration files
 # TODO should this be in a separate module maybe?
@@ -78,6 +78,16 @@ IGNORED_TESTS = {
     "chapter_17/valid/sizeof/simple.c",
     "chapter_17/valid/libraries/pass_alloced_memory.c",
     "chapter_17/valid/libraries/pass_alloced_memory_client.c",
+    "chapter_18/valid/extra_credit/libraries/classify_unions.c",
+    "chapter_18/valid/extra_credit/libraries/classify_unions_client.c",
+    "chapter_18/valid/extra_credit/libraries/param_passing.c",
+    "chapter_18/valid/extra_credit/libraries/param_passing_client.c",
+    "chapter_18/valid/extra_credit/libraries/static_union_inits.c",
+    "chapter_18/valid/extra_credit/libraries/static_union_inits_client.c",
+    "chapter_18/valid/extra_credit/libraries/union_inits.c",
+    "chapter_18/valid/extra_credit/libraries/union_inits_client.c",
+    "chapter_18/valid/extra_credit/libraries/union_retvals.c",
+    "chapter_18/valid/extra_credit/libraries/union_retvals_client.c",
 }
 PREPROCESSOR_ENV = "DIOPTASE_GCC"
 PREPROCESSOR_FLAGS = ["-E", "-P"]
@@ -171,10 +181,12 @@ def get_libs(prog: Path) -> List[Path]:
 
 
 # Regex to strip comments and string/char literals for type-skip detection.
+COMMENT_RE = re.compile(r"//.*?$|/\*.*?\*/", re.DOTALL | re.MULTILINE)
 COMMENT_AND_STRING_RE = re.compile(
     r'//.*?$|/\*.*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
     re.DOTALL | re.MULTILINE,
 )
+INCLUDE_RE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.MULTILINE)
 
 
 def strip_comments_and_strings(source: str) -> str:
@@ -194,11 +206,43 @@ def build_type_skip_pattern(type_tokens: Sequence[str]) -> Optional[Pattern[str]
     return re.compile("|".join(patterns))
 
 
-def contains_type_tokens(program: Path, type_pattern: Pattern[str]) -> bool:
-    """Check for excluded type keywords in source, ignoring comments/strings."""
-    text = program.read_text(encoding="utf-8")
+def _contains_type_tokens_in_file(
+    path: Path, type_pattern: Pattern[str], visited: Set[Path]
+) -> bool:
+    """Check for excluded type keywords in a file and its local includes."""
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    if resolved in visited:
+        return False
+    visited.add(resolved)
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
     scrubbed = strip_comments_and_strings(text)
-    return type_pattern.search(scrubbed) is not None
+    if type_pattern.search(scrubbed) is not None:
+        return True
+
+    comment_stripped = COMMENT_RE.sub(" ", text)
+    for match in INCLUDE_RE.finditer(comment_stripped):
+        include_name = match.group(1)
+        include_path = path.parent / include_name
+        if not include_path.exists():
+            include_path = TEST_DIR / include_name
+        if include_path.exists():
+            if _contains_type_tokens_in_file(include_path, type_pattern, visited):
+                return True
+
+    return False
+
+
+def contains_type_tokens(program: Path, type_pattern: Pattern[str]) -> bool:
+    """Check for excluded type keywords in source and local includes."""
+    return _contains_type_tokens_in_file(program, type_pattern, set())
 
 
 def is_library_test(program: Path) -> bool:
@@ -790,8 +834,10 @@ class TestChapter(unittest.TestCase):
         hex_path = source_file.with_suffix(f".{suffix_tag}.hex")
         if kernel_mode:
             asm_args = [str(assembler), "-kernel", "-o", str(hex_path)]
+            # init.s must be first so its .origin establishes the kernel entry point.
+            asm_args.append(str(kernel_init))
             asm_args.extend(str(path) for path in asm_files)
-            asm_args.extend([str(kernel_arith), str(kernel_init)])
+            asm_args.append(str(kernel_arith))
         else:
             asm_args = [str(assembler), "-crt", "-o", str(hex_path)]
             asm_args.extend(str(path) for path in asm_files)

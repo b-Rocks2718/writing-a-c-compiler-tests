@@ -17,16 +17,16 @@
 // library functions
 int strcmp(char *s1, char *s2);
 
-void *malloc(unsigned long size);
-void *calloc(unsigned long nmemb, unsigned long size);
+void *malloc(unsigned int size);
+void *calloc(unsigned int nmemb, unsigned int size);
 
 // struct type def
 struct s {
     char *one_msg;
     unsigned char two_arr[3];
     struct s *three_self_ptr;
-    double four_d;
-    double *five_d_ptr;
+    int four_i;
+    int *five_i_ptr;
 };
 
 // validation functions defined in library

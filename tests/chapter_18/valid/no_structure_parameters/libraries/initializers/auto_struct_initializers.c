@@ -11,8 +11,8 @@
 int validate_full_initialization(struct s *ptr) {
     if (strcmp(ptr->one_msg, "I'm a struct!") || ptr->two_arr[0] != 's' ||
         ptr->two_arr[1] != 'u' || ptr->two_arr[2] != 'p' ||
-        ptr->three_self_ptr != ptr || ptr->four_d != 2e12 ||
-        *ptr->five_d_ptr != 2e12) {
+        ptr->three_self_ptr != ptr || ptr->four_i != 2000000 ||
+        *ptr->five_i_ptr != 2000000) {
         return 0;
     }
 
@@ -31,7 +31,7 @@ int validate_partial_initialization(struct s *ptr, char *expected_msg) {
     }
 
     // validate elements that weren't explicitly initialized are 0
-    if (ptr->two_arr[2] || ptr->four_d || ptr->five_d_ptr) {
+    if (ptr->two_arr[2] || ptr->four_i || ptr->five_i_ptr) {
         return 0;
     }
 
@@ -41,7 +41,7 @@ int validate_converted(struct s *ptr) {
     if (!ptr->one_msg ||  // just validate that this pointer isn't null
         ptr->two_arr[0] != 220 || ptr->two_arr[1] != 232 ||
         ptr->two_arr[2] != 224 || ptr->three_self_ptr ||
-        ptr->four_d != 2999.0 || *ptr->five_d_ptr != 0.0) {
+        ptr->four_i != 2999 || *ptr->five_i_ptr != 0) {
         return 0;
     }
 
@@ -57,8 +57,8 @@ int validate_two_structs(struct s *ptr1, struct s *ptr2) {
         ptr2->two_arr[0] != 'x' || ptr2->two_arr[1] != 'y' ||
         ptr2->three_self_ptr !=
             ptr1 ||  // ptr2->three_self_ptr is ptr1, not to itself
-        ptr2->four_d != 150.0 ||
-        *ptr1->five_d_ptr != 123.4) {
+        ptr2->four_i != 150 ||
+        *ptr1->five_i_ptr != 123) {
         return 0;
     }
 

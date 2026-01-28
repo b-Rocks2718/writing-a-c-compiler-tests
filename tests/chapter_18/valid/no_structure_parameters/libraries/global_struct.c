@@ -4,7 +4,7 @@
 
 void update_struct(void) {
     global.arr[1] = global.arr[0] * 2;
-    global.d = 5.0;
+    global.d = 5;
 }
 
 void update_outer_struct(void) {

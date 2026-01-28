@@ -12,8 +12,8 @@
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
 
-double get_double(void) {
-    return 2e12;
+int get_int(void) {
+    return 2000000;
 }
 
 // case 1: fully initialized struct
@@ -22,8 +22,8 @@ int test_full_initialization(void) {
         // use string literals to initialize both pointers and arrays
         "I'm a struct!", "sup",
         &full,          // initialize member with pointer to self
-        get_double(),   // initialize member with result of function call
-        &(full.four_d)  // initialize member with pointer to other member in
+        get_int(),    // initialize member with result of function call
+        &(full.four_i)  // initialize member with pointer to other member in
                         // self
     };
 
@@ -52,9 +52,9 @@ int test_implicit_type_conversions(void) {
     struct s converted = {
         malloc(5),              // convert void * to char *
         {i / 2, i / 3, i * 4},  // truncate ints to chars: 220, 232, and 224
-        0l,                     // convert null pointer constant to null pointer
-        i - 1,                  // convert int to double
-        calloc(1, sizeof(double))  // convert void * to double *
+        0,                     // convert null pointer constant to null pointer
+        i - 1,                 // convert int to int
+        calloc(1, sizeof(int))  // convert void * to int *
     };
 
     return validate_converted(&converted);
@@ -62,8 +62,8 @@ int test_implicit_type_conversions(void) {
 
 // case 4: initialize with single expression instead of compound initiailizer
 int test_single_exp_initializer(void) {
-    double d = 123.4;
-    struct s s1 = {"Yet another string", "xy", &s1, 150.0, &d};
+    int i = 123;
+    struct s s1 = {"Yet another string", "xy", &s1, 150, &i};
     struct s s2 = s1;
 
     return validate_two_structs(&s1, &s2);
