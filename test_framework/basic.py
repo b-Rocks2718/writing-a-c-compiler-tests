@@ -53,6 +53,7 @@ EMU_RUN_ENV = "DIOPTASE_WACC_EMULATOR"
 EMU_ASSEMBLER_ENV = "DIOPTASE_ASSEMBLER"
 EMU_EMULATOR_ENV = "DIOPTASE_EMULATOR_SIMPLE"
 EMU_EMULATOR_FULL_ENV = "DIOPTASE_EMULATOR_FULL"
+EMU_CRT_ENV = "DIOPTASE_WACC_CRT"
 EMU_KERNEL_ENV = "DIOPTASE_WACC_KERNEL"
 EMU_KERNEL_INIT_ENV = "DIOPTASE_WACC_KERNEL_INIT"
 EMU_KERNEL_ARITH_ENV = "DIOPTASE_WACC_KERNEL_ARITH"
@@ -138,6 +139,7 @@ EMU_DEFAULT_FULL_EMULATOR_PATHS = [
 ]
 EMU_DEFAULT_KERNEL_INIT = COMPILER_ROOT / "tests" / "kernel" / "init.s"
 EMU_DEFAULT_KERNEL_ARITH = COMPILER_ROOT / "tests" / "kernel" / "arithmetic.s"
+EMU_DEFAULT_CRT_DIR = (COMPILER_ROOT / "crt").resolve()
 # main TestChapter class + related utilities
 
 
@@ -322,6 +324,18 @@ def select_data_path(env_name: str, default: Path) -> Optional[Path]:
     else:
         candidate = default
     if candidate.exists():
+        return candidate
+    return None
+
+
+def select_directory_path(env_name: str, default: Path) -> Optional[Path]:
+    """Return a directory path from an environment override or default."""
+    raw = os.environ.get(env_name)
+    if raw is not None and raw.strip() != "":
+        candidate = Path(raw).expanduser().resolve()
+    else:
+        candidate = default
+    if candidate.is_dir():
         return candidate
     return None
 
@@ -839,7 +853,13 @@ class TestChapter(unittest.TestCase):
             asm_args.extend(str(path) for path in asm_files)
             asm_args.append(str(kernel_arith))
         else:
-            asm_args = [str(assembler), "-crt", "-o", str(hex_path)]
+            crt_dir = select_directory_path(EMU_CRT_ENV, EMU_DEFAULT_CRT_DIR)
+            if crt_dir is None:
+                self.fail(
+                    f"unable to locate CRT directory; set {EMU_CRT_ENV} or add "
+                    f"{EMU_DEFAULT_CRT_DIR}"
+                )
+            asm_args = [str(assembler), "-crt", str(crt_dir), "-o", str(hex_path)]
             asm_args.extend(str(path) for path in asm_files)
         asm_result = subprocess.run(asm_args, check=False, capture_output=True, text=True)
         if asm_result.returncode != 0:
