@@ -61,3 +61,15 @@ cd writing-a-c-compiler-tests
 Two things have changed since the initial early access version of the book:
 1. The chapter numbers have decreased by 1 (e.g. Chapter 2 in the EA version is now Chapter 1).
 2. We now use `int main(void)` instead of `int main()` to declare a function with no parameters. You'll need to define a `void` token in the lexer and include it in the grammar rule for function definitions.
+
+## Dioptase variants
+
+The `tests/chapter_18/valid/dioptase/` and `tests/chapter_19/dioptase/`
+directories contain adaptations of book tests for Dioptase's documented C subset
+and available emulator runtime. Original test programs remain unchanged. The
+chapter 18 variants use arrays, strings, structs, and other features available
+by that chapter; chapter 19 variants check optimized observable behavior.
+`dioptase_expected_results.json` records their expected return values. The
+chapter runner selects these variants when `DIOPTASE_WACC_EMULATOR` is set,
+and skips them for other compilers so they do not change the book's chapter
+feature requirements.

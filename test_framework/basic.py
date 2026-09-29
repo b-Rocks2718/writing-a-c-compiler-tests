@@ -24,6 +24,10 @@ EXPECTED_RESULTS: dict[str, Any]
 
 with open(ROOT_DIR / "expected_results.json", "r", encoding="utf-8") as f:
     EXPECTED_RESULTS = json.load(f)
+# The fork's Dioptase adaptations have their own expected results so updates
+# to the book's reference results do not replace their runtime expectations.
+with open(ROOT_DIR / "dioptase_expected_results.json", "r", encoding="utf-8") as f:
+    EXPECTED_RESULTS.update(json.load(f))
 
 EXTRA_CREDIT_PROGRAMS: dict[str, List[str]]
 REQUIRES_MATHLIB: List[str]
@@ -428,6 +432,10 @@ def should_skip_program(
     skip_type_pattern: Optional[Pattern[str]],
 ) -> bool:
     """Skip tests that exercise features outside the configured subset."""
+    # Fork-specific variants use the complete Dioptase C subset, including
+    # features introduced after their source program's original chapter.
+    if "dioptase" in program.parts and not uses_emulator():
+        return True
     if is_ignored_test(program):
         return True
     if uses_emulator() and has_asm_libs(program):
@@ -836,8 +844,19 @@ class TestChapter(unittest.TestCase):
                     args, check=False, capture_output=True, text=True
                 )
                 if compile_result.returncode != 0:
+                    # bcc reports parse and TAC errors on stdout. Preserve both
+                    # streams so a failed WACC case shows the actual diagnostic.
+                    details = []
+                    if compile_result.stdout:
+                        details.append(f"stdout:\n{compile_result.stdout.rstrip()}")
+                    if compile_result.stderr:
+                        details.append(f"stderr:\n{compile_result.stderr.rstrip()}")
+                    if not details:
+                        details.append("compiler produced no diagnostic output")
                     self.fail(
-                        f"emulator compile failed for {src}:\n{compile_result.stderr}"
+                        f"emulator compile failed for {src} "
+                        f"(status {compile_result.returncode}):\n"
+                        + "\n".join(details)
                     )
                 asm_files.append(asm_path)
             elif src.suffix == ".s":

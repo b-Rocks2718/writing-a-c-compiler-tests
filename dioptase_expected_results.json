@@ -1,0 +1,80 @@
+{
+  "chapter_18/valid/dioptase/wacc_address_of_string.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_adjacent_strings.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_ch10_static_local_multiple_scopes.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_ch10_static_recursive_call.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_ch14_eval_compound_lhs_once.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_ch17_void_for_loop.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_ch9_call_putchar.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_ch9_hello_world.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_char_bitwise_promotions.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_char_compound_assignment.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_char_partial_initialization.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_shift_dereferenced_pointers.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_sizeof_type_and_expression.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_static_structs.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_string_array_writes.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_string_special_characters.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_union_conditional.c": {
+    "return_code": 0
+  },
+  "chapter_18/valid/dioptase/wacc_union_self_pointer.c": {
+    "return_code": 0
+  },
+  "chapter_19/dioptase/struct_member_updates.c": {
+    "return_code": 0
+  },
+  "chapter_19/dioptase/wacc_ch19_add_all_to_worklist.c": {
+    "return_code": 0
+  },
+  "chapter_19/dioptase/wacc_ch19_alias_analysis_change.c": {
+    "return_code": 0
+  },
+  "chapter_19/dioptase/wacc_ch19_char_type_conversion.c": {
+    "return_code": 0
+  },
+  "chapter_19/dioptase/wacc_ch19_dont_remove_funcall.c": {
+    "return_code": 0
+  },
+  "chapter_19/dioptase/wacc_ch19_loop_dead_store.c": {
+    "return_code": 0
+  },
+  "chapter_19/dioptase/wacc_ch19_nested_loops.c": {
+    "return_code": 0
+  },
+  "chapter_19/dioptase/wacc_ch19_source_killed_on_one_path.c": {
+    "return_code": 0
+  }
+}
